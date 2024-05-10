@@ -2,7 +2,6 @@ package goweb
 
 import (
 	"fmt"
-	"github.com/protamail/htm"
 	"log"
 	"net/http"
 	"runtime/debug"
@@ -10,7 +9,7 @@ import (
 )
 
 type Handler interface {
-	HandleRequest(w http.ResponseWriter, req *http.Request) htm.Result
+	HandleRequest(w http.ResponseWriter, req *http.Request) Result
 }
 
 type RootMux struct {
