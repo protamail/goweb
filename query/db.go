@@ -8,43 +8,36 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/protamail/goweb/conf"
 )
 
-type prepareSQLFunc func([]any) (string, []any)
 type DB struct {
 	DB             *sql.DB
-	DriverName     string //"oracle", "pgx", etc
-	ConnStr        string
-	PrepareSqlArgs prepareSQLFunc
-	StmtCache      map[string]*sql.Stmt
+	driverName     string //"oracle", "postgres", etc
+	connStr        string
+	stmtCache      map[string]*sql.Stmt
 }
 
-var Debug = false
-
-func NewDB(driverName string, connStr string, f prepareSQLFunc) *DB {
-	return &DB{nil, driverName, connStr, f, make(map[string]*sql.Stmt)}
+func RegisterDB(dbName string, driverName string, connStr string) {
+	if conf.Debug {
+		log.Println("Registering DB:", dbName)
+	}
+	db, ok := DBMap[dbName]
+	if ok && db.DB != nil {
+		db.DB.Close()
+		for _, stmt := range db.stmtCache {
+			stmt.Close()
+		}
+	}
+	DBMap[dbName] = &DB{nil, driverName, connStr, make(map[string]*sql.Stmt)}
 }
 
 var DBMap = make(map[string]*DB)
 
-func ResetDBMap() {
-	if Debug {
-		log.Println("Initializing DBs")
-	}
-	for _, db := range DBMap {
-		if db.DB != nil {
-			db.DB.Close()
-			for _, stmt := range db.StmtCache {
-				stmt.Close()
-			}
-		}
-	}
-	DBMap = make(map[string]*DB)
-}
-
-func assertOK(err error) {
+func assertOK(err error, sqlStr string) {
 	if err != nil {
-		log.Panic(err)
+		log.Panic(err, "\nSQL: ", sqlStr)
 	}
 }
 
@@ -53,13 +46,13 @@ func GetDB(connName string) *DB {
 	var err error
 	d, ok := DBMap[connName]
 	if !ok {
-		log.Panicf("Unknown conn name: %s", connName)
+		log.Panicf("Unknown database: %s", connName)
 	}
 	if d.DB == nil {
-		if Debug {
-			log.Println("Opening DB", connName, d.ConnStr)
+		if conf.Debug {
+			log.Println("Opening", connName, "DB")
 		}
-		d.DB, err = sql.Open(d.DriverName, d.ConnStr)
+		d.DB, err = sql.Open(d.driverName, d.connStr)
 		if err != nil {
 			d.DB = nil
 			log.Panic(err)
@@ -77,41 +70,52 @@ func WithArg(sql string, arg any) Arg {
 	return Arg{sql, arg}
 }
 
-func Exec(db *DB, sqlArgs ...any) sql.Result {
+func TryExec(dbName string, sqlArgs ...any) sql.Result {
+	defer func() {
+		recover()
+	}()
+	return Exec(dbName, sqlArgs...)
+}
+
+func Exec(dbName string, sqlArgs ...any) sql.Result {
 	var err error
 	var startTime time.Time
-	if Debug {
+	if conf.Debug {
 		startTime = time.Now()
 	}
-	sqlStr, args := db.PrepareSqlArgs(sqlArgs)
-	stmt, ok := db.StmtCache[sqlStr]
-	if !ok {
-		if Debug {
-			log.Println("Preparing stmt for:", sqlStr)
-		}
-		stmt, err = db.DB.Prepare(sqlStr)
-		assertOK(err)
-		db.StmtCache[sqlStr] = stmt
-	}
-	result, err := stmt.Exec(args...)
-	assertOK(err)
-	if Debug {
+	db := GetDB(dbName)
+	sqlStr, args := prepareSqlArgs(db.driverName, sqlArgs)
+	//don't prepare statements for DDLs, updates, etc.
+	result, err := db.DB.Exec(sqlStr, args...)
+	assertOK(err, sqlStr)
+	if conf.Debug {
 		rows, _ := result.RowsAffected()
-		log.Println("Running SQL:", sqlStr, args, "Rows affected:", rows,
-			"Elapsed:", time.Now().Sub(startTime))
+		log.Println("Running SQL:", sqlStr, argsToLog(args),
+			"\nElapsed:", time.Now().Sub(startTime), "Rows affected:", rows)
 	}
 	return result
 }
 
-func Val[T any](db *DB, sqlArgs ...any) T {
-	return *One[T](db, sqlArgs...)
+func argsToLog(sqlArgs []any) []string {
+	result := make([]string, 0, len(sqlArgs))
+	for i, arg := range sqlArgs {
+		result = append(result, fmt.Sprintf("%v", arg))
+		if len(result[i]) > 100 {
+			result[i] = result[i][0:90]+"..."+result[i][len(result[i])-10:]
+		}
+	}
+	return result
 }
 
-func One[T any](db *DB, sqlArgs ...any) *T {
-	r := All[T](db, sqlArgs...)
+func Val[T any](dbName string, sqlArgs ...any) T {
+	return *One[T](dbName, sqlArgs...)
+}
+
+func One[T any](dbName string, sqlArgs ...any) *T {
+	r := All[T](dbName, sqlArgs...)
 	switch len(r) {
 	case 1:
-		return r[0]
+		return &r[0]
 	case 0:
 		return new(T)
 	}
@@ -119,31 +123,32 @@ func One[T any](db *DB, sqlArgs ...any) *T {
 	return nil
 }
 
-func All[T any](db *DB, sqlArgs ...any) (result []*T) {
+func All[T any](dbName string, sqlArgs ...any) (result []T) {
 	var err error
 	var startTime time.Time
-	if Debug {
+	if conf.Debug {
 		startTime = time.Now()
 	}
-	sqlStr, args := db.PrepareSqlArgs(sqlArgs)
-	stmt, ok := db.StmtCache[sqlStr]
+	db := GetDB(dbName)
+	sqlStr, args := prepareSqlArgs(db.driverName, sqlArgs)
+	stmt, ok := db.stmtCache[sqlStr]
 	if !ok {
-		if Debug {
+		if conf.Debug {
 			log.Println("Preparing stmt for:", sqlStr)
 		}
 		stmt, err = db.DB.Prepare(sqlStr)
-		assertOK(err)
-		db.StmtCache[sqlStr] = stmt
+		assertOK(err, sqlStr)
+		db.stmtCache[sqlStr] = stmt
 	}
 	rows, err := stmt.Query(args...)
-	assertOK(err)
+	assertOK(err, sqlStr)
 	defer func() {
 		rows.Close()
-		assertOK(rows.Err())
+		assertOK(rows.Err(), sqlStr)
 	}()
 
 	colTypes, err := rows.ColumnTypes()
-	assertOK(err)
+	assertOK(err, sqlStr)
 	colNames := make([]string, len(colTypes))
 	for i, colType := range colTypes {
 		colNames[i] = strings.ReplaceAll(colType.Name(), "_", "")
@@ -152,24 +157,25 @@ func All[T any](db *DB, sqlArgs ...any) (result []*T) {
 	var targetRow T
 	scanFields := findScanFields(&targetRow, colNames)
 
-	result = make([]*T, 0, 10)
+	result = make([]T, 0, 10)
 	mult := 20 //initial grow factor, subsequently *2
 	for rows.Next() {
 
 		err = rows.Scan(scanFields...)
-		assertOK(err)
+		assertOK(err, sqlStr)
 
 		if cap(result) <= len(result) {
-			result = append(make([]*T, 0, len(result)*mult), result...)
+			result = append(make([]T, 0, len(result)*mult), result...)
 			mult = 2
 		}
-		resultRow := new(T)
-		*resultRow = targetRow
-		result = append(result, resultRow)
+		//storing structures inline as opposed to just pointers is less fragmentation,
+		//easier to work with, and doesn't have performance disadvantages on results less than 10K rows
+		//but even for 1M row results, performance hit is 10-20%
+		result = append(result, targetRow)
 	}
-	if Debug {
-		log.Println("Running query:", sqlStr, args, "Rows returned:", len(result),
-			"Elapsed:", time.Now().Sub(startTime))
+	if conf.Debug {
+		log.Println("Running query:", sqlStr, argsToLog(args),
+			"\nElapsed:", time.Now().Sub(startTime), "Rows returned:", len(result))
 	}
 	return
 }
@@ -180,6 +186,12 @@ type destField struct {
 }
 
 func (dest *destField) Scan(src any) error {
+	s, ok := src.([]byte)
+	if ok && dest.kind != reflect.Slice {
+		//[]byte may be returned for a string, e.g. for pg numeric
+		//so if dest is not a slice, convert it to explicit string
+		src = string(s)
+	}
 	switch src.(type) {
 	case string:
 		switch dest.kind {
@@ -212,14 +224,14 @@ func (dest *destField) Scan(src any) error {
 				return nil
 			}
 		}
+	case []byte:
+		dest.val.SetBytes(src.([]byte))
+		return nil
 	case nil:
 		dest.val.SetZero()
 		return nil
 	case time.Time:
 		dest.val.Set(reflect.ValueOf(src))
-		return nil
-	case []byte:
-		dest.val.SetBytes(src.([]byte))
 		return nil
 	case bool:
 		dest.val.SetBool(src.(bool))
@@ -264,7 +276,8 @@ func findScanFields(targetPtr any, colNames []string) (result []any) {
 		}
 		for i, t := range result {
 			if t == nil {
-				log.Panicf("Unable to map %s column to a %s struct field", colNames[i], targetType.Name())
+				log.Panicf("Unable to map '%s' column to a %s struct field, make sure the field is: exported, underscore collapsed, case-insensitive",
+					colNames[i], targetType.Name())
 			}
 		}
 	} else if len(colNames) == 1 { //case of scalar value return as opposed to struct
@@ -273,4 +286,60 @@ func findScanFields(targetPtr any, colNames []string) (result []any) {
 		log.Panicf("Query returns too many columns, expecting 1")
 	}
 	return
+}
+
+func checkCap[T any](arr []T) []T {
+	if cap(arr) == len(arr) {
+		arr = append(make([]T, 0, len(arr)*2), arr...)
+	}
+	return arr
+}
+
+func prepareSqlArgs(driverName string, sqlArgs []any) (string, []any) {
+	sqlStr := make([]string, 0, len(sqlArgs))
+	args := make([]any, 0, len(sqlArgs))
+	i := 1
+	for _, arg := range sqlArgs {
+		switch arg.(type) {
+		case Arg:
+			if len(arg.(Arg).Sql) != 0 {
+				sqlStr = checkCap(sqlStr)
+				args = checkCap(args)
+				switch driverName {
+				//trailing space is important
+				case "oracle":
+					sqlStr = append(sqlStr, fmt.Sprintf("%s:%d ", arg.(Arg).Sql, i))
+				case "postgres":
+					sqlStr = append(sqlStr, fmt.Sprintf("%s$%d ", arg.(Arg).Sql, i))
+				default:
+					sqlStr = append(sqlStr, arg.(Arg).Sql+"? ")
+				}
+				args = append(args, arg.(Arg).Arg)
+				i++
+			}
+		case []Arg:
+			for _, arg1 := range arg.([]Arg) {
+				if len(arg1.Sql) != 0 {
+					sqlStr = checkCap(sqlStr)
+					args = checkCap(args)
+					switch driverName {
+					case "oracle":
+						sqlStr = append(sqlStr, fmt.Sprintf("%s:%d ", arg1.Sql, i))
+					case "postgres":
+						sqlStr = append(sqlStr, fmt.Sprintf("%s?%d ", arg1.Sql, i))
+					default:
+						sqlStr = append(sqlStr, arg1.Sql+"? ")
+					}
+					args = append(args, arg1.Arg)
+					i++
+				}
+			}
+		case string:
+			sqlStr = checkCap(sqlStr)
+			sqlStr = append(sqlStr, arg.(string))
+		default:
+			log.Panicf("Invalid arg type: %T, expecting Arg or string", arg)
+		}
+	}
+	return strings.Join(sqlStr, ""), args
 }

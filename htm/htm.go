@@ -1,7 +1,8 @@
-package goweb
+package htm
 
 import (
 	"fmt"
+	"log"
 	"html"
 	"net/url"
 	"strings"
@@ -20,17 +21,20 @@ func NewHTML(cap int) Result {
 	return Result{make([]string, 0, cap)}
 }
 
-func NewElem(tag string, attr Attr, bodyEls ...Result) Result {
+func NewElem(tag string, attr Attr, bodyEl ...Result) Result {
 	var r, body Result
-	switch len(bodyEls) {
+	if len(attr) > 0 && string(attr)[0] != ' ' {
+		log.Panic("Invalid attribute")
+	}
+	switch len(bodyEl) {
 	case 0:
 		if voidEl[tag] || voidEl[strings.ToLower(tag)] {
 			return Result{[]string{"<" + tag + string(attr) + "\n>"}}
 		}
 	case 1:
-		body = bodyEls[0]
+		body = bodyEl[0]
 	default:
-		body = Append(body, bodyEls...)
+		body = Append(body, bodyEl...)
 	}
 
 	switch len(body.pieces) {
@@ -49,7 +53,7 @@ func NewElem(tag string, attr Attr, bodyEls ...Result) Result {
 	return r
 }
 
-var attrEscaper = strings.NewReplacer(`"`, URIComponentEncode(`"`))
+var attrEscaper = strings.NewReplacer(`"`, EncodeURIComponent(`"`))
 
 func Prepend(doctype string, html Result) Result {
 	if len(html.pieces) > 0 {
@@ -59,43 +63,42 @@ func Prepend(doctype string, html Result) Result {
 	return Result{[]string{doctype}}
 }
 
-func NewAttr(nv ...string) Attr {
-	sar := make([]string, 0, len(nv)*5/2)
-	if len(nv)%2 > 0 {
-		panic("NewAttr(...) expects even number of arguments")
+//NewAttr constructs an attribute portion of an element(tag)
+//attr: can be a complete attribute(s) specified as-is, or an attribute name, in which case it must end with =,
+//and be followed by attribute value in the next arg, e.g.
+//attr("disabled", `rel="icon" id=""`, "href=", "/", "class=", "") => disabled rel="icon" id="" href="/" class=""
+func NewAttr(attr ...string) Attr {
+	if len(attr) == 0 {
+		return ""
 	}
-	for i := 1; i < len(nv); i += 2 {
-		sar = append(sar, " ")
-		k, v := nv[i-1], nv[i]
-		if strings.Index(v, `"`) >= 0 {
-			v = attrEscaper.Replace(v)
-		}
-		if k[len(k)-1] == 61 { //if already ends with =
-			sar = append(sar, k, `"`, v, `"`)
+	sar := make([]string, 0, len(attr)*5/2)
+	expectAttrVal := false
+	for _, v := range attr {
+		if expectAttrVal {
+			expectAttrVal = false
+			if strings.Index(v, `"`) >= 0 {
+				v = attrEscaper.Replace(v)
+			}
+			sar = append(sar, v, `"`)
 		} else {
-			//if attr key is not ending with =, output bare or as-is attribute discarding the value
-			//e.g. attr("diabled", ""), or attr(`rel="icon"`, "")
-			sar = append(sar, k)
+			if len(v) == 0 {
+				continue
+			}
+			if v[0] != ' ' {
+				sar = append(sar, " ")
+			}
+			if v[len(v)-1] == '=' {
+				expectAttrVal = true
+				sar = append(sar, v, `"`)
+			} else {
+				sar = append(sar, v)
+			}
 		}
+	}
+	if expectAttrVal {
+		log.Panic("Expecting attribute value")
 	}
 	return Attr(strings.Join(sar, ""))
-}
-
-func JoinAttr(attrs ...Attr) Attr {
-	var n int
-
-	for _, attr := range attrs {
-		n += len(attr)
-	}
-
-	var b strings.Builder
-	b.Grow(n)
-
-	for _, attr := range attrs {
-		b.WriteString(string(attr))
-	}
-
-	return Attr(b.String())
 }
 
 func See(what ...any) string {
@@ -175,12 +178,12 @@ func AsIs(a ...string) Result {
 	return Result{a}
 }
 
-// Used to output HTML text, escaping HTML reserved characters <>&"
-func HTMLEncode(a string) Result {
+// Used to output HTML text, encoding HTML reserved characters <>&"
+func Text(a string) Result {
 	return Result{[]string{html.EscapeString(a)}}
 }
 
-var URIComponentEncode = url.QueryEscape
+var EncodeURIComponent = url.QueryEscape
 
 var jsStringEscaper = strings.NewReplacer(
 	`"`, `\"`,

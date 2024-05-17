@@ -2,16 +2,17 @@ package goweb_test
 
 import (
 	"fmt"
-	"github.com/protamail/goweb"
 	"strconv"
 	"testing"
+
+	"github.com/protamail/goweb/htm"
 )
 
-type Result = goweb.Result
+type Result = htm.Result
 
-var el, attr, add = goweb.NewElem, goweb.NewAttr, goweb.Append
+var el, attr, add = htm.NewElem, htm.NewAttr, htm.Append
 var printf, itoa = fmt.Sprintf, strconv.Itoa
-var henc, uenc, id = goweb.HTMLEncode, goweb.URIComponentEncode, goweb.AsIs
+var text, uric, id = htm.Text, htm.EncodeURIComponent, htm.AsIs
 
 func Test1(t *testing.T) {
 	type B struct {
@@ -19,7 +20,7 @@ func Test1(t *testing.T) {
 		B int
 	}
 	var b = B{"heh", 2}
-	fmt.Printf(goweb.See(1, b))
+	fmt.Printf(htm.See(1, b))
 
 	//var r Result
 	//
@@ -47,41 +48,41 @@ func Test1(t *testing.T) {
 					el("nav", attr("class=", "heh", "data-href=", "sdsd?sds=1"),
 						el("div", "",
 							/*el("ul", "", func() Result {
-								var result = goweb.NewHTML(1000)
+								var result = htm.NewHTML(1000)
 								for j := 0; j < 1000; j++ {
 									result = add(result,
-										el("li", attr("data-href=", uenc(`hj&"'>gjh`)+`&ha=`+uenc(`wdfw&`)+func() string {
+										el("li", attr("data-href=", uric(`hj&"'>gjh`)+`&ha=`+uric(`wdfw&`)+func() string {
 											if true {
 												return "&eee"
 											}
 											return ""
 										}()),
-											henc(printf("%d", j)),
+											text(printf("%d", j)),
 											el("img", attr("src=", printf("img%d", j))),
 											el("img", attr("src=", itoa(j))),
 											el(`img`, attr("src=", printf("img%.2f", float32(j)))),
 											el("br", ""),
-											el("div", "", henc("heh"), id("da"), henc("boom")),
-											el("span", attr("data-href", "ddd"), henc("dsdsi&dsd")),
+											el("div", "", text("heh"), id("da"), text("boom")),
+											el("span", attr("data-href", "ddd"), text("dsdsi&dsd")),
 										),
 									)
 								}
 								return result
 							}()),*/
-							el("ul", "", goweb.Map(a, func(j int) Result {
-								return el("li", attr("data-href=", uenc(`hj&"'>gjh`)+`&ha=`+uenc(`wdfw&`)+func() string {
+							el("ul", "", htm.Map(a, func(j int) Result {
+								return el("li", attr("data-href=", uric(`hj&"'>gjh`)+`&ha=`+uric(`wdfw&`)+func() string {
 									if true {
 										return "&eee"
 									}
 									return ""
 								}()),
-									henc(printf("%d", j)),
+									text(printf("%d", j)),
 									el("img", attr("src=", printf("img%d", j))),
 									el("img", attr("src=", itoa(j))),
 									el(`img`, attr("src=", printf("img%.2f", float32(j)))),
 									el("br", ""),
-									el("div", "", henc("heh"), id("da"), henc("boom")),
-									el("span", attr("data-href", "ddd"), henc("dsdsi&dsd"), henc(a[j])),
+									el("div", "", text("heh"), id("da"), text("boom")),
+									el("span", attr("data-href", "ddd"), text("dsdsi&dsd"), text(a[j])),
 								)
 							})),
 						),
@@ -108,7 +109,7 @@ func aTest2(t *testing.T) {
 				func() Result {
 					var result Result
 					for _, b := range buckets {
-						result = add(result, el("td", "", henc(b["bucketName"])))
+						result = add(result, el("td", "", text(b["bucketName"])))
 					}
 					return result
 				}())
