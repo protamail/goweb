@@ -84,7 +84,7 @@ func Exec(dbName string, sqlArgs ...any) sql.Result {
 		startTime = time.Now()
 	}
 	db := GetDB(dbName)
-	sqlStr, args := prepareSqlArgs(db.driverName, sqlArgs)
+	sqlStr, args := prepareSQLArgs(db.driverName, sqlArgs)
 	//don't prepare statements for DDLs, updates, etc.
 	result, err := db.DB.Exec(sqlStr, args...)
 	assertOK(err, sqlStr)
@@ -130,7 +130,7 @@ func All[T any](dbName string, sqlArgs ...any) (result []T) {
 		startTime = time.Now()
 	}
 	db := GetDB(dbName)
-	sqlStr, args := prepareSqlArgs(db.driverName, sqlArgs)
+	sqlStr, args := prepareSQLArgs(db.driverName, sqlArgs)
 	stmt, ok := db.stmtCache[sqlStr]
 	if !ok {
 		if conf.Debug {
@@ -295,51 +295,46 @@ func checkCap[T any](arr []T) []T {
 	return arr
 }
 
-func prepareSqlArgs(driverName string, sqlArgs []any) (string, []any) {
-	sqlStr := make([]string, 0, len(sqlArgs))
+func prepareSQLArgs(driverName string, sqlArgs []any) (string, []any) {
+	sqls := make([]string, 0, len(sqlArgs)*3)
 	args := make([]any, 0, len(sqlArgs))
 	i := 1
+	appendArg := func(arg Arg) {
+		if len(arg.Sql) != 0 {
+			sqls = checkCap(sqls)
+			switch driverName {
+			//trailing space is important
+			case "oracle":
+				sqls = append(sqls, arg.Sql, ":", strconv.Itoa(i))
+			case "postgres":
+				sqls = append(sqls, arg.Sql, "$", strconv.Itoa(i))
+			default:
+				sqls = append(sqls, arg.Sql+"? ")
+			}
+			args = checkCap(args)
+			args = append(args, arg.Arg)
+			i++
+		}
+	}
 	for _, arg := range sqlArgs {
 		switch arg.(type) {
 		case Arg:
-			if len(arg.(Arg).Sql) != 0 {
-				sqlStr = checkCap(sqlStr)
-				args = checkCap(args)
-				switch driverName {
-				//trailing space is important
-				case "oracle":
-					sqlStr = append(sqlStr, fmt.Sprintf("%s:%d ", arg.(Arg).Sql, i))
-				case "postgres":
-					sqlStr = append(sqlStr, fmt.Sprintf("%s$%d ", arg.(Arg).Sql, i))
-				default:
-					sqlStr = append(sqlStr, arg.(Arg).Sql+"? ")
-				}
-				args = append(args, arg.(Arg).Arg)
-				i++
-			}
-		case []Arg:
-			for _, arg1 := range arg.([]Arg) {
-				if len(arg1.Sql) != 0 {
-					sqlStr = checkCap(sqlStr)
-					args = checkCap(args)
-					switch driverName {
-					case "oracle":
-						sqlStr = append(sqlStr, fmt.Sprintf("%s:%d ", arg1.Sql, i))
-					case "postgres":
-						sqlStr = append(sqlStr, fmt.Sprintf("%s?%d ", arg1.Sql, i))
-					default:
-						sqlStr = append(sqlStr, arg1.Sql+"? ")
-					}
-					args = append(args, arg1.Arg)
-					i++
-				}
-			}
+			appendArg(arg.(Arg))
 		case string:
-			sqlStr = checkCap(sqlStr)
-			sqlStr = append(sqlStr, arg.(string))
+			sqls = checkCap(sqls)
+			sqls = append(sqls, arg.(string))
+		case []Arg: //for dynamically generated sqls
+			for _, arg1 := range arg.([]Arg) {
+				appendArg(arg1)
+			}
+		case []string:
+			for _, arg1 := range arg.([]string) {
+				sqls = checkCap(sqls)
+				sqls = append(sqls, arg1)
+			}
 		default:
-			log.Panicf("Invalid arg type: %T, expecting Arg or string", arg)
+			log.Panicf("Invalid arg type: %T, expecting Arg, []Arg, string, or []string", arg)
 		}
 	}
-	return strings.Join(sqlStr, ""), args
+	return strings.Join(sqls, ""), args
 }
