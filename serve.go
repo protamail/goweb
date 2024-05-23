@@ -40,6 +40,7 @@ func (rm *RootMux) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 	defer func() {
 		//for fine grain control, override this in the app handler
 		if err := recover(); err != nil {
+			w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 			w.WriteHeader(http.StatusInternalServerError)
 			stack := fmt.Sprintf("Error: %v\n%s", err, debug.Stack())
 			_, ok := err.(ClientError)
@@ -57,6 +58,7 @@ func (rm *RootMux) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 	}()
 	if rm.Handler != nil {
 		w.Header().Set("Cache-Control", "no-store") //no caching unless handler overrides
+		w.Header().Set("Content-Type", "text/html; charset=utf-8") //default content type
 		req.ParseForm() //make req.Form values available
 		result := rm.Handler.HandleRequest(w, req)
 		if !result.IsEmpty() {

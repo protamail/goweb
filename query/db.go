@@ -90,7 +90,7 @@ func Exec(dbName string, sqlArgs ...any) sql.Result {
 	assertOK(err, sqlStr)
 	if conf.Debug {
 		rows, _ := result.RowsAffected()
-		log.Println("Running SQL:", sqlStr, argsToLog(args),
+		log.Println("Running", dbName, "SQL:", sqlStr, argsToLog(args),
 			"\nElapsed:", time.Now().Sub(startTime), "Rows affected:", rows)
 	}
 	return result
@@ -107,20 +107,21 @@ func argsToLog(sqlArgs []any) []string {
 	return result
 }
 
-func Val[T any](dbName string, sqlArgs ...any) T {
-	return *One[T](dbName, sqlArgs...)
+func Val[T any](dbName string, sqlArgs ...any) (T, bool) {
+	p, ok := One[T](dbName, sqlArgs...)
+	return *p, ok
 }
 
-func One[T any](dbName string, sqlArgs ...any) *T {
+func One[T any](dbName string, sqlArgs ...any) (*T, bool) {
 	r := All[T](dbName, sqlArgs...)
 	switch len(r) {
 	case 1:
-		return &r[0]
+		return &r[0], true
 	case 0:
-		return new(T)
+		return new(T), false
 	}
 	log.Panicf("Query returned more than one row: %v", sqlArgs)
-	return nil
+	return nil, false
 }
 
 func All[T any](dbName string, sqlArgs ...any) (result []T) {
@@ -134,7 +135,7 @@ func All[T any](dbName string, sqlArgs ...any) (result []T) {
 	stmt, ok := db.stmtCache[sqlStr]
 	if !ok {
 		if conf.Debug {
-			log.Println("Preparing stmt for:", sqlStr)
+			log.Println("Preparing", dbName, "stmt for:", sqlStr)
 		}
 		stmt, err = db.DB.Prepare(sqlStr)
 		assertOK(err, sqlStr)
@@ -174,7 +175,7 @@ func All[T any](dbName string, sqlArgs ...any) (result []T) {
 		result = append(result, targetRow)
 	}
 	if conf.Debug {
-		log.Println("Running query:", sqlStr, argsToLog(args),
+		log.Println("Running", dbName, "query:", sqlStr, argsToLog(args),
 			"\nElapsed:", time.Now().Sub(startTime), "Rows returned:", len(result))
 	}
 	return
@@ -296,7 +297,7 @@ func checkCap[T any](arr []T) []T {
 }
 
 func prepareSQLArgs(driverName string, sqlArgs []any) (string, []any) {
-	sqls := make([]string, 0, len(sqlArgs)*3)
+	sqls := make([]string, 0, len(sqlArgs)*4)
 	args := make([]any, 0, len(sqlArgs))
 	i := 1
 	appendArg := func(arg Arg) {
@@ -304,12 +305,12 @@ func prepareSQLArgs(driverName string, sqlArgs []any) (string, []any) {
 			sqls = checkCap(sqls)
 			switch driverName {
 			//trailing space is important
-			case "oracle":
-				sqls = append(sqls, arg.Sql, ":", strconv.Itoa(i))
 			case "postgres":
-				sqls = append(sqls, arg.Sql, "$", strconv.Itoa(i))
+				sqls = append(sqls, arg.Sql, "$", strconv.Itoa(i), " ")
+			case "oracle":
+				sqls = append(sqls, arg.Sql, ":", strconv.Itoa(i), " ")
 			default:
-				sqls = append(sqls, arg.Sql+"? ")
+				sqls = append(sqls, arg.Sql, "? ")
 			}
 			args = checkCap(args)
 			args = append(args, arg.Arg)

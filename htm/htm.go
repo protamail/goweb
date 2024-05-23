@@ -57,8 +57,13 @@ var attrEscaper = strings.NewReplacer(`"`, EncodeURIComponent(`"`))
 
 func Prepend(doctype string, html Result) Result {
 	if len(html.pieces) > 0 {
-		html.pieces[0] = doctype + html.pieces[0]
-		return html
+		if len(html.pieces) < len(html.pieces[0]) {
+			newHTML := NewHTML(len(html.pieces)+1)
+			return Append(newHTML, Result{[]string{doctype}}, html)
+		} else {
+			html.pieces[0] = doctype + html.pieces[0]
+			return html
+		}
 	}
 	return Result{[]string{doctype}}
 }
@@ -101,10 +106,10 @@ func NewAttr(attr ...string) Attr {
 	return Attr(strings.Join(sar, ""))
 }
 
-func See(what ...any) string {
+func See(what ...any) Result {
 	return Map(what, func(i int) Result {
 		return Result{[]string{fmt.Sprintf("%+v\n", what[i])}}
-	}).String()
+	})
 }
 
 func Map[T any](a []T, f func(int) Result) Result {
